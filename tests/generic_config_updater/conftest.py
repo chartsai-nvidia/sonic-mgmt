@@ -121,10 +121,7 @@ def ignore_expected_loganalyzer_exceptions(request, duthosts, loganalyzer):
 
             # Ignore errors from k8s config test
             ".*ERR ctrmgrd.py: Refer file.*",
-            ".*ERR ctrmgrd.py: Join failed.*",
-
-            # Ignore SRv6 SAI related errors
-            r".*ERR syncd[0-9]*#syncd.*SAI_API_SRV6:.*SRV6 unsupported or not enabled on this device.*",
+            ".*ERR ctrmgrd.py: Join failed.*"
         ]
         loganalyzer[duthost.hostname].ignore_regex.extend(ignoreRegex)
 
