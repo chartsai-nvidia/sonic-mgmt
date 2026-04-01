@@ -18,8 +18,7 @@ from tests.common.helpers.assertions import pytest_assert
 logger = logging.getLogger(__name__)
 
 pytestmark = [
-    pytest.mark.topology('bmc'),
-    pytest.mark.device_type('vs'),
+    pytest.mark.topology('bmc', 't0'),
 ]
 
 MOCK_NEIGHBOR_NAME = "mock-neighbor"
@@ -107,7 +106,6 @@ def lldp_macvlan(duthost):
     Create a macvlan interface on eth0 in bridge mode for LLDP packet
     injection, and tear it down after the test.
     """
-    duthost = duthost
     # Clean up any stale interface from a previous failed run
     duthost.shell(
         "ip link del {} 2>/dev/null || true".format(MACVLAN_IFACE)
