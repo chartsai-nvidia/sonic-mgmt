@@ -7,6 +7,7 @@ inject crafted LLDP packets via a macvlan interface in bridge mode
 to simulate a neighbor and verify lldpd processes them correctly.
 """
 
+import json
 import logging
 import struct
 import time
@@ -160,7 +161,6 @@ def _get_lldp_neighbors_json(duthost):
     output = duthost.shell(
         "docker exec lldp lldpctl -f json"
     )["stdout"]
-    import json
     return json.loads(output)
 
 
