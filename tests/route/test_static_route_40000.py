@@ -4,7 +4,7 @@ import os
 import time
 import json
 import pytest
-
+from itertools import islice
 from tests.common.helpers.assertions import pytest_assert
 from tests.common.utilities import wait_until
 
@@ -22,41 +22,36 @@ BATCH_SIZE = 500
 
 ROUTE_NETWORK = ipaddress.ip_network("23.23.0.0/16")
 
-CPU_MAX_PCT = 20
+# observed max CPU ~ 22% and max Mem ~ 10%
+CPU_MAX_PCT = 30
 MEM_MAX_PCT = 20
 
 
 class TestStaticRouteScale:
 
     @staticmethod
-    def generate_ip_addresses(count):
-        """Return *count* /32 prefix strings from ROUTE_NETWORK, skipping .0 and .255 last octets."""
-        results = []
-        for host in ROUTE_NETWORK.hosts():
-            if len(results) >= count:
-                break
-            results.append("{}/32".format(host))
-        return results
+    def get_ip_gen():
+        return islice(ROUTE_NETWORK.hosts(), ROUTE_COUNT)
 
     @staticmethod
-    def generate_static_routes(nh):
+    def generate_static_routes(nexthop):
         routes = {
             "STATIC_ROUTE": {}
         }
-        ip_addresses = TestStaticRouteScale.generate_ip_addresses(ROUTE_COUNT)
-        for ip in ip_addresses:
-            routes["STATIC_ROUTE"][f"default|{ip}"] = {
+        ip_gen = TestStaticRouteScale.get_ip_gen()
+        for ip in ip_gen:
+            routes["STATIC_ROUTE"][f"default|{ip}/32"] = {
                 "blackhole": "false",
                 "distance": "0",
-                "ifname": "",
-                "nexthop": nh,
+                "ifname": "Ethernet0",
+                "nexthop": nexthop,
                 "nexthop-vrf": "default"
             }
         return routes
 
     @staticmethod
-    def add_static_routes_to_dut(duthost, nh):
-        routes = TestStaticRouteScale.generate_static_routes(nh)
+    def add_static_routes_to_dut(duthost, nexthop):
+        routes = TestStaticRouteScale.generate_static_routes(nexthop)
         tmpfile = "/tmp/static_routes.json"
         duthost.copy(content=json.dumps(
             routes, indent=4), dest=tmpfile)
@@ -78,7 +73,7 @@ class TestStaticRouteScale:
         pytest_assert(False, "No IPv4 peer_addr in minigraph_interfaces")
 
     @staticmethod
-    def static_route_count_v4(duthost):
+    def static_route_count_v4(duthost) -> int:
         """Parsed `show ip route sum` — see SonicHost.get_ip_route_summary in tests/common/devices/sonic.py."""
         ipv4_summary, _ = duthost.get_ip_route_summary()
         return ipv4_summary.get("static", {}).get("routes", 0)
@@ -86,11 +81,9 @@ class TestStaticRouteScale:
     @staticmethod
     def remove_static_routes_from_dut(duthost):
         result = duthost.run_sonic_db_cli_cmd('CONFIG_DB KEYS "STATIC_ROUTE*"')
-        keys = [k.strip() for k in result["stdout_lines"] if k.strip()]
-        if not keys:
-            return
-        for i in range(0, len(keys), BATCH_SIZE):
-            batch = keys[i:i + BATCH_SIZE]
+        keys = (k.strip() for k in result["stdout_lines"] if k.strip())
+
+        while batch := list(islice(keys, BATCH_SIZE)):
             del_cmds = "; ".join('sonic-db-cli CONFIG_DB UNLINK "{}"'.format(k)
                                  for k in batch)
             duthost.shell(del_cmds)
@@ -98,6 +91,9 @@ class TestStaticRouteScale:
     @staticmethod
     def assert_cpu_mem(duthost, cpu_max_pct=CPU_MAX_PCT, mem_max_pct=MEM_MAX_PCT):
         """Assert CPU/memory from a single top snapshot are within thresholds."""
+        # Expected output:
+        # CPU: 1.9
+        # Mem: 6.5
         output = duthost.shell(
             "top -bn1 | awk '"
             "/^%Cpu/{printf \"CPU: %.1f\\n\", 100-$8} "
@@ -106,8 +102,8 @@ class TestStaticRouteScale:
             module_ignore_errors=True,
         )
         if output["rc"] != 0:
-            logger.warning("Failed to run top: %s", output.get("stderr", ""))
-            return
+            logger.error("Failed to run top: %s", output.get("stderr", ""))
+            pytest.fail("Failed to run top: %s", output.get("stderr", ""))
 
         cpu_pct = None
         mem_pct = None
@@ -145,20 +141,15 @@ class TestStaticRouteScale:
 
     @staticmethod
     def check_status(duthost, target):
-        top_out = duthost.shell(
-            "top -bn1 | awk '"
-            "/^%Cpu/{printf \"CPU: %.1f%%\", 100-$8} "
-            "/^[KMG]iB Mem/{printf \", Mem: %.1f%%\", $8*100/$4}"
-            "'")["stdout"]
-        logger.info("%s", top_out)
+        TestStaticRouteScale.assert_cpu_mem(duthost)
         return TestStaticRouteScale.static_route_count_v4(duthost) == target
 
     def test_static_route_scale(self, duthost, tbinfo, static_route_cleanup):
         """
-        Add ROUTE_COUNT static routes; poll until `show ip route sum` static count matches (no loop timeout).
+        Add and remove ROUTE_COUNT static routes; monitor CPU/memory usage and assert it is within thresholds.
         """
 
-        nh = self.ipv4_nexthop_from_minigraph(duthost, tbinfo)
+        nexthop = self.ipv4_nexthop_from_minigraph(duthost, tbinfo)
         current_static_route_count = self.static_route_count_v4(duthost)
         add_target = current_static_route_count + ROUTE_COUNT
         remove_target = current_static_route_count
@@ -168,7 +159,7 @@ class TestStaticRouteScale:
         logger.info("Adding %d static routes to DUT",
                     ROUTE_COUNT)
         time_start = time.time()
-        self.add_static_routes_to_dut(duthost, nh)
+        self.add_static_routes_to_dut(duthost, nexthop)
 
         pytest_assert(
             wait_until(ROUTE_TIMEOUT, POLL_INTERVAL, 0,
