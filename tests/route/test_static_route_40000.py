@@ -84,9 +84,9 @@ class TestStaticRouteScale:
         keys = (k.strip() for k in result["stdout_lines"] if k.strip())
 
         while batch := list(islice(keys, BATCH_SIZE)):
-            del_cmds = "; ".join('sonic-db-cli CONFIG_DB UNLINK "{}"'.format(k)
-                                 for k in batch)
-            duthost.shell(del_cmds)
+            cmd = "CONFIG_DB UNLINK " + \
+                " ".join('"{}"'.format(k) for k in batch)
+            duthost.run_sonic_db_cli_cmd(cmd)
 
     @staticmethod
     def assert_cpu_mem(duthost, cpu_max_pct=CPU_MAX_PCT, mem_max_pct=MEM_MAX_PCT):
