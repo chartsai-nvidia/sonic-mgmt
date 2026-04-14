@@ -74,7 +74,11 @@ class TestStaticRouteScale:
 
     @staticmethod
     def static_route_count_v4(duthost) -> int:
-        """Parsed `show ip route sum` — see SonicHost.get_ip_route_summary in tests/common/devices/sonic.py."""
+        """
+        Returns the number of static routes.
+
+        If there is no static field in the output, returns 0.
+        """
         ipv4_summary, _ = duthost.get_ip_route_summary()
         return ipv4_summary.get("static", {}).get("routes", 0)
 
@@ -91,6 +95,33 @@ class TestStaticRouteScale:
     @staticmethod
     def assert_cpu_mem(duthost, cpu_max_pct=CPU_MAX_PCT, mem_max_pct=MEM_MAX_PCT):
         """Assert CPU/memory from a single top snapshot are within thresholds."""
+
+        cpu_pct, mem_pct = TestStaticRouteScale.get_cpu_mem(duthost)
+
+        failures = []
+        if cpu_pct is None:
+            failures.append("CPU % is not available")
+        elif cpu_pct > cpu_max_pct:
+            failures.append(
+                "CPU {}% exceeds max {}%".format(cpu_pct, cpu_max_pct))
+        if mem_pct is None:
+            failures.append("Memory % is not available")
+        elif mem_pct > mem_max_pct:
+            failures.append(
+                "Memory {}% exceeds max {}%".format(mem_pct, mem_max_pct))
+        if failures:
+            logger.error("Resource usage out of bounds: " +
+                         "; ".join(failures))
+            pytest.fail("Resource usage out of bounds: " + "; ".join(failures))
+
+        logger.info("System usage: CPU=%s%%, Mem=%s%%", cpu_pct, mem_pct)
+
+    @staticmethod
+    def get_cpu_mem(duthost):
+        """Get CPU and memory usage from top output."""
+        # Get current CPU and memory usage from top output.
+        # CPU is calculated by 100% - idle percentage
+        # Mem is calculated by used / total
         # Expected output:
         # CPU: 1.9
         # Mem: 6.5
@@ -98,8 +129,7 @@ class TestStaticRouteScale:
             "top -bn1 | awk '"
             "/^%Cpu/{printf \"CPU: %.1f\\n\", 100-$8} "
             "/^[KMG]iB Mem/{printf \"Mem: %.1f\\n\", $8*100/$4}"
-            "'",
-            module_ignore_errors=True,
+            "'"
         )
         if output["rc"] != 0:
             logger.error("Failed to run top: %s", output.get("stderr", ""))
@@ -118,20 +148,7 @@ class TestStaticRouteScale:
                     mem_pct = float(line.split()[1])
                 except (ValueError, IndexError):
                     pass
-
-        logger.info("System usage: CPU=%s%%, Mem=%s%%", cpu_pct, mem_pct)
-
-        failures = []
-        if cpu_pct is not None and cpu_pct > cpu_max_pct:
-            failures.append(
-                "CPU {}% exceeds max {}%".format(cpu_pct, cpu_max_pct))
-        if mem_pct is not None and mem_pct > mem_max_pct:
-            failures.append(
-                "Memory {}% exceeds max {}%".format(mem_pct, mem_max_pct))
-        if failures:
-            logger.error("Resource usage out of bounds: " +
-                         "; ".join(failures))
-            pytest.fail("Resource usage out of bounds: " + "; ".join(failures))
+        return cpu_pct, mem_pct
 
     @pytest.fixture
     def static_route_cleanup(self, duthost):
